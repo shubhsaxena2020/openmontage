@@ -1,0 +1,35 @@
+# ── Python ───────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ── Node / Remotion ─────────────────────────────────────
+remotion/node_modules/
+remotion/out/
+.remotion/
+
+# ── Studio run artifacts (regenerate, don't commit) ─────
+studio_out/
+studio_*/
+pipeline_out/
+b_fs_*/
+b_fs_*.json
+*.mp4
+*.wav
+!samples/**/*.mp4
+!samples/**/*.wav
+
+# ── Model weights (fetched/offline) ─────────────────────
+*.pt
+*.onnx
+
+# ── Editor / OS ─────────────────────────────────────────
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
