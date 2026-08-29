@@ -8,6 +8,7 @@
     "noEmit": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
+    "resolveJsonModule": true,
     "lib": ["ES2020", "DOM", "DOM.Iterable"],
     "types": ["react", "react-dom"]
   },

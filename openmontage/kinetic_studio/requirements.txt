@@ -1,0 +1,19 @@
+# Kinetic Studio — Python dependencies
+# Install on the laptop (Windows) with the venv active:
+#   pip install -r tools/studio/requirements.txt
+# For a CUDA GPU, replace the torch/torchvision lines with the CUDA wheels from
+# https://pytorch.org (e.g. pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121)
+
+numpy
+opencv-python-headless
+torch
+torchvision
+ultralytics
+norfair
+supervision
+librosa
+ffmpeg-python
+soundfile
+scipy
+faster-whisper
+PyYAML

@@ -1,0 +1,319 @@
+"""Kinetic Studio orchestrator.
+
+Turns raw gym footage into a beat-synced vertical short by chaining the OpenMontage
+toolkit:
+
+  input.mp4
+    -> extract audio (ffmpeg)                 [if no separate music/voiceover]
+    -> beat_drop_mapper(audio)  -> beats.json
+    -> motion_energy(video)     -> energy.json (highlight moments)
+    -> fitness_pose(video)      -> pose.json   (reps/angles; optional)
+    -> box_tracker(pose|motion) -> boxes.json  (athlete bbox for reframe)
+    -> smart_reframe(video,boxes)-> reframed.mp4 (9:16, centred, anti-jitter)
+    -> kinetic_ramper(reframed,beats) -> ramped.mp4 (tempo-synced to drops)
+    -> kinetic_word_sync(voiceover|audio) -> captions.json (if captions enabled)
+    -> Remotion StudioComposition(ramped + HUD + captions) -> final short.mp4
+    -> mux music back under the short (ffmpeg)
+
+Every step is resilient: a failure is recorded but does not abort the whole run (the
+studio degrades gracefully — e.g. no captions if no speech, no pose if model missing).
+
+Portable: pathlib paths, auto ffmpeg discovery, CUDA auto-detect. Runs headless on the
+VPS for smoke-tests and on the laptop for production.
+"""
+from __future__ import annotations
+
+import json
+import os
+import shutil
+import subprocess
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+
+from kinetic_studio.config import KineticStudioConfig
+from kinetic_studio.box_tracker import build_boxes
+
+# Import the toolkit (same package tree)
+from tools import make_tool  # noqa: E402
+
+
+def find_ffmpeg() -> str:
+    """Locate ffmpeg: env FFMPEG_BIN -> PATH -> imageio-ffmpeg fallback."""
+    env = os.environ.get("FFMPEG_BIN")
+    if env and shutil.which(env):
+        return env
+    on_path = shutil.which("ffmpeg")
+    if on_path:
+        return on_path
+    try:
+        import imageio_ffmpeg  # type: ignore
+        return imageio_ffmpeg.get_ffmpeg_exe()
+    except Exception:
+        raise RuntimeError("ffmpeg not found (set FFMPEG_BIN or install ffmpeg)")
+
+
+def device_auto(preferred: str) -> str:
+    if preferred != "auto":
+        return preferred
+    try:
+        import torch  # type: ignore
+        return "cuda" if torch.cuda.is_available() else "cpu"
+    except Exception:
+        return "cpu"
+
+
+@dataclass
+class StudioRunResult:
+    ok: bool
+    final_video: Optional[str] = None
+    steps: List[Dict[str, Any]] = field(default_factory=list)
+    audio_used: Optional[str] = None
+    error: Optional[str] = None
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "ok": self.ok, "final_video": self.final_video,
+            "audio_used": self.audio_used, "error": self.error,
+            "steps": self.steps,
+        }
+
+
+class KineticStudio:
+    def __init__(self, config: KineticStudioConfig, workdir: Optional[str] = None,
+                 ffmpeg: Optional[str] = None, verbose: bool = True):
+        self.cfg = config
+        self.work = Path(workdir or config.workdir).resolve()
+        self.work.mkdir(parents=True, exist_ok=True)
+        self.ffmpeg = ffmpeg or find_ffmpeg()
+        self.verbose = verbose
+        self._log: List[Dict[str, Any]] = []
+
+    def _step(self, name: str, ok: bool, detail: str = "", artifact: Optional[str] = None):
+        self._log.append({"step": name, "ok": ok, "detail": detail, "artifact": artifact})
+        if self.verbose:
+            print(f"  [{('OK' if ok else 'FAIL')}] {name}: {detail}")
+
+    # ---- helpers -------------------------------------------------------------
+    def _extract_audio(self, video: str, out_wav: str) -> bool:
+        try:
+            subprocess.run([self.ffmpeg, "-y", "-i", video, "-vn", "-ac", "1",
+                            "-ar", "22050", out_wav],
+                           check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            return True
+        except Exception as e:
+            self._step("extract_audio", False, str(e))
+            return False
+
+    def _mux_audio(self, video: str, audio: str, out: str) -> bool:
+        try:
+            subprocess.run([self.ffmpeg, "-y", "-i", video, "-i", audio,
+                            "-map", "0:v:0", "-map", "1:a:0", "-c:v", "copy",
+                            "-shortest", out],
+                           check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            return True
+        except Exception as e:
+            self._step("mux_audio", False, str(e))
+            return False
+
+    # ---- main ----------------------------------------------------------------
+    def run(self, input_video: str, music: Optional[str] = None,
+            voiceover: Optional[str] = None, out_name: str = "kinetic_short.mp4") -> StudioRunResult:
+        input_video = str(input_video)
+        dev = device_auto(self.cfg.pose.device)
+
+        # 1) audio source
+        audio = music or voiceover
+        if audio is None:
+            audio = str(self.work / "audio.wav")
+            if not self._extract_audio(input_video, audio):
+                audio = None
+        self._step("audio", audio is not None, audio or "no audio available")
+        audio_for_beats = audio
+
+        # 2) beats
+        beats_json = str(self.work / "beats.json")
+        if audio_for_beats:
+            r = make_tool("beat_drop_mapper", audio_path=audio_for_beats,
+                          out_json=beats_json, drop_rel_thr=self.cfg.ramp.drop_rel_thr)
+            self._step("beats", r.ok, str(r.metrics), beats_json if r.ok else None)
+        else:
+            r = None
+            self._step("beats", False, "skipped (no audio)")
+        beats_json = beats_json if (r and r.ok) else None
+
+        # 3) motion energy (highlights)
+        energy_json = str(self.work / "energy.json")
+        r = make_tool("motion_energy", input_path=input_video, method="diff",
+                      out_json=energy_json)
+        self._step("energy", r.ok, str(r.metrics), energy_json if r.ok else None)
+        energy_json = energy_json if (r and r.ok) else None
+
+        # 4) pose (optional)
+        pose_json = str(self.work / "pose.json")
+        if self.cfg.pose.enabled:
+            r = make_tool("fitness_pose", input_path=input_video,
+                          model=self.cfg.pose.model, max_frames=self.cfg.pose.max_frames,
+                          device=dev, out_json=pose_json)
+            self._step("pose", r.ok, str(r.metrics), pose_json if r.ok else None)
+            if not (r and r.ok):
+                pose_json = None
+        else:
+            pose_json = None
+            self._step("pose", True, "disabled by config")
+
+        # 5) boxes for reframe
+        boxes = build_boxes(input_video, pose_json)
+        boxes_json = str(self.work / "boxes.json")
+        with open(boxes_json, "w") as fh:
+            json.dump(boxes, fh)
+        self._step("boxes", len(boxes) > 0, f"{len(boxes)} boxes", boxes_json)
+
+        # 6) smart reframe -> 9:16
+        reframed = str(self.work / "reframed.mp4")
+        r = make_tool("smart_reframe", input_path=input_video, boxes_json=boxes_json,
+                      out_path=reframed, target_w=self.cfg.reframe.target_w,
+                      alpha=self.cfg.reframe.alpha, deadband=self.cfg.reframe.deadband)
+        self._step("reframe", r.ok, str(r.metrics), reframed if r.ok else None)
+        if not (r and r.ok):
+            return StudioRunResult(ok=False, steps=self._log,
+                                   error="reframe failed", audio_used=audio)
+        reframed = reframed if r.ok else None
+
+        # 7) kinetic ramper (tempo sync to beats)
+        ramped = str(self.work / "ramped.mp4")
+        r = make_tool("kinetic_ramper", input_path=reframed, map_json=beats_json,
+                      out_path=ramped, setup_speed=self.cfg.ramp.setup_speed,
+                      peak_speed=self.cfg.ramp.peak_speed)
+        self._step("ramper", r.ok, str(r.metrics), ramped if r.ok else None)
+        ramped = ramped if (r and r.ok) else reframed
+        assert ramped is not None, "reframed must exist at this point"
+
+        # 8) captions (if voiceover/speech present and enabled)
+        captions_json = None
+        if self.cfg.caption.enabled and voiceover:
+            captions_json = str(self.work / "captions.json")
+            r = make_tool("kinetic_word_sync", audio_path=voiceover,
+                          model=self.cfg.caption.model, language=self.cfg.caption.language,
+                          max_words_per_line=self.cfg.caption.max_words_per_line,
+                          out_json=captions_json)
+            self._step("captions", r.ok, str(r.metrics), captions_json if r.ok else None)
+            captions_json = captions_json if (r and r.ok) else None
+        else:
+            self._step("captions", True, "disabled / no voiceover")
+
+        # 9) Remotion final composite (HUD + kinetic captions over ramped video)
+        final = str(self.work / out_name)
+        remotion_ok = self._render_studio(ramped, captions_json, final)
+        if not remotion_ok:
+            self._step("studio_composite", False, "Remotion render unavailable; "
+                       "using ramped.mp4 as final", ramped)
+            final = ramped
+        else:
+            self._step("studio_composite", True, "rendered short", final)
+
+        # 10) mux music back under the short (if separate music provided)
+        if music and final:
+            muxed = str(self.work / "final_with_music.mp4")
+            if self._mux_audio(final, music, muxed):
+                final = muxed
+                self._step("mux_music", True, "music added", final)
+            else:
+                self._step("mux_music", False, "kept short without music", final)
+
+        ok = final is not None and os.path.exists(final)
+        return StudioRunResult(ok=ok, final_video=final, steps=self._log,
+                               audio_used=audio)
+
+    # ---- Remotion bridge -----------------------------------------------------
+    def _render_studio(self, video_path: str, captions_json: Optional[str],
+                       out_path: str) -> bool:
+        remotion_dir = Path(__file__).resolve().parent.parent / "remotion"
+        if not (remotion_dir / "package.json").exists():
+            self._step("studio_composite", False, "remotion/ not found; skipping")
+            return False
+        public = remotion_dir / "public"
+        public.mkdir(exist_ok=True)
+        # Remotion's headless Chromium decodes H.264 reliably but NOT OpenCV's mp4v
+        # (MPEG-4 Part 2) codec -> "no supported streams". Transcode the background to
+        # H.264 so both the headless render here and `remotion studio` on the laptop work.
+        bg = public / "studio_bg.mp4"
+        try:
+            subprocess.run([self.ffmpeg, "-y", "-i", video_path, "-an",
+                            "-c:v", "libx264", "-pix_fmt", "yuv420p",
+                            "-preset", "veryfast", str(bg)],
+                           check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception as e:
+            self._step("studio_composite", False, f"transcode failed: {e}")
+            return False
+        if not bg.exists():
+            self._step("studio_composite", False, "transcoded bg missing")
+            return False
+        # Probe real frame count so the Composition duration matches the footage
+        # (Remotion errors if --frames exceeds the media length).
+        n_frames = 0
+        try:
+            import cv2  # type: ignore
+            cap = cv2.VideoCapture(str(bg))
+            n_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+            cap.release()
+        except Exception:
+            n_frames = 0
+        cap_data = None
+        if captions_json and os.path.exists(captions_json):
+            with open(captions_json) as fh:
+                cap_data = json.load(fh)
+        studio_input = {
+            "video": "studio_bg.mp4",
+            "brand": self.cfg.brand.name,
+            "accent": self.cfg.brand.accent,
+            "watermark_sub": self.cfg.brand.watermark_sub,
+            "exercise": self.cfg.brand.exercise,
+            "exercise_detail": self.cfg.brand.exercise_detail,
+            "words": cap_data["words"] if cap_data else [],
+            "frame_schedule": cap_data["frame_schedule"] if cap_data else [],
+            "fps": self.cfg.output.fps,
+            "width": self.cfg.output.width,
+            "height": self.cfg.output.height,
+            "durationInFrames": max(60, n_frames or
+                                    (len(cap_data["frame_schedule"]) if cap_data else 300)),
+        }
+        with open(remotion_dir / "studio_input.json", "w") as fh:
+            json.dump(studio_input, fh)
+        try:
+            env = dict(os.environ)
+            env["PATH"] = str(remotion_dir / "node_modules" / ".bin") + os.pathsep + env.get("PATH", "")
+            # Render the full composition. Pass studio_input.json as --props so the
+            # runtime brand/caption/duration values are used (calculateMetadata derives
+            # durationInFrames from props; the static import is only a fallback).
+            props_path = (remotion_dir / "studio_input.json").resolve()
+            subprocess.run(
+                [str(remotion_dir / "node_modules" / ".bin" / "remotion"), "render",
+                 "src/studio-entry.tsx", "StudioComposition", str(out_path),
+                 f"--props={props_path}"],
+                cwd=str(remotion_dir), env=env, check=True,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            return os.path.exists(out_path)
+        except subprocess.CalledProcessError as e:
+            err = (e.stderr or b"").decode(errors="replace")[-1500:]
+            self._step("studio_composite", False, f"render error: {err}")
+            return False
+        except Exception as e:
+            self._step("studio_composite", False, f"render error: {e}")
+            return False
+
+
+def run_cli(input_video: str, **opts) -> StudioRunResult:
+    cfg = opts.pop("config", None)
+    if isinstance(cfg, str):
+        config = KineticStudioConfig.load(cfg)
+    elif isinstance(cfg, KineticStudioConfig):
+        config = cfg
+    else:
+        config = KineticStudioConfig()
+    if opts.get("brand"):
+        config.brand.name = opts["brand"]
+    studio = KineticStudio(config, workdir=opts.get("workdir"))
+    return studio.run(input_video, music=opts.get("music"),
+                      voiceover=opts.get("voiceover"),
+                      out_name=opts.get("out", "kinetic_short.mp4"))

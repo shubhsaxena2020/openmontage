@@ -1,0 +1,12 @@
+# Remotion build/bundle cache
+build/
+out/
+
+# runtime artifact produced by the Kinetic Studio orchestrator (the bg video)
+public/studio_bg.mp4
+
+# node
+node_modules/
+
+# runtime studio_input.json written by orchestrator (root, not src/)
+studio_input.json

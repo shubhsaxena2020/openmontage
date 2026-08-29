@@ -1,11 +1,13 @@
 {
   "name": "openmontage-remotion-hud",
   "version": "0.1.0",
-  "description": "Fitness HUD Remotion components (rep counter, exercise name card, branded watermark) for OpenMontage.",
+  "description": "Fitness HUD + Kinetic Studio final composite (Remotion) for OpenMontage.",
   "private": true,
   "scripts": {
     "dev": "remotion studio src/index.tsx",
-    "render": "remotion render src/index.tsx FitnessHUD out/hud.mp4",
+    "studio": "remotion studio src/studio-entry.tsx",
+    "render-hud": "remotion render src/index.tsx FitnessHUD out/hud.mp4",
+    "render-studio": "remotion render src/studio-entry.tsx StudioComposition out/studio_short.mp4",
     "build": "remotion bundle src/index.tsx",
     "typecheck": "tsc --noEmit"
   },

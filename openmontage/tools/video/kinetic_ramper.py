@@ -88,12 +88,15 @@ class KineticRamperTool(BaseTool):
             peaks += [float(x) for x in p["peak_times"].split(",") if x.strip()]
         peaks = sorted(set(round(x, 3) for x in peaks if x >= 0))
         if not peaks:
-            return ToolResult(ok=False, error="no peak/drop timestamps supplied")
-
-        segs = _build_segments(peaks, [], p["setup_speed"], p["peak_speed"])
-        # slow windows = the peak segments themselves
-        slow_windows = [s["t_start"] for s in segs if s["speed"] == p["peak_speed"]]
-        segs = _build_segments(peaks, slow_windows, p["setup_speed"], p["peak_speed"])
+            # No beat/drop signal (e.g. silent footage, no music supplied). Degrade
+            # gracefully to a single uniform-speed segment instead of failing — the
+            # studio still gets a reframed, lightly sped-up short.
+            segs = [{"t_start": 0.0, "t_end": 1e9, "speed": p["setup_speed"]}]
+            slow_windows: List[float] = []
+        else:
+            segs = _build_segments(peaks, [], p["setup_speed"], p["peak_speed"])
+            slow_windows = [s["t_start"] for s in segs if s["speed"] == p["peak_speed"]]
+            segs = _build_segments(peaks, slow_windows, p["setup_speed"], p["peak_speed"])
 
         # render each segment with setpts, then concat
         import cv2
