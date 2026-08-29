@@ -24,7 +24,9 @@ print("=== registry ===")
 tl = list_tools()
 for t in tl:
     print(f"  {t['category']:8} {t['name']:16} {t['description'][:58]}")
-assert len(tl) == 5, f"expected 5 registered tools, got {len(tl)}"
+# All 7 engine tools registered (fitness_pose, motion_energy, smart_reframe,
+# kinetic_ramper, beat_drop_mapper, audio_master_duck, kinetic_word_sync).
+assert len(tl) == 7, f"expected 7 registered tools, got {len(tl)}"
 
 # 1. motion_energy
 print("\n=== motion_energy (synthetic athlete clip) ===")
