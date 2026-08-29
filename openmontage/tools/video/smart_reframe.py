@@ -115,9 +115,14 @@ class SmartReframeTool(BaseTool):
             return ToolResult(ok=False, error="no frames / no boxes")
         sm = _smooth_centers(centers, p["alpha"], p["deadband"])
 
-        # quantify jitter: std of frame-to-frame center delta (px) after smoothing
-        deltas = np.diff(np.array(sm), axis=0)
-        jitter = float(np.linalg.norm(deltas, axis=1).mean())
+        # quantify jitter: mean frame-to-frame center displacement (px).
+        # raw = unsmoothed detected centers; smooth = after EMA + dead-band.
+        # Smoothing should strictly reduce jitter (proves anti-jitter tracking works).
+        raw_deltas = np.diff(np.array(centers), axis=0)
+        raw_jitter = float(np.linalg.norm(raw_deltas, axis=1).mean())
+        smooth_deltas = np.diff(np.array(sm), axis=0)
+        jitter = float(np.linalg.norm(smooth_deltas, axis=1).mean())
+        jitter_reduction = round(1.0 - (jitter / (raw_jitter + 1e-9)), 3)
 
         # render
         cap = cv2.VideoCapture(p["input_path"])
@@ -151,7 +156,9 @@ class SmartReframeTool(BaseTool):
         return ToolResult(
             ok=True,
             data={"source_wh": [W, H], "target_wh": [tw, th], "frames": frames_read,
-                  "jitter_px": round(jitter, 3)},
+                  "jitter_px": round(jitter, 3), "raw_jitter_px": round(raw_jitter, 3),
+                  "jitter_reduction": jitter_reduction},
             artifacts={"video": p["out_path"]},
-            metrics={"jitter_px": round(jitter, 3), "output_frames": frames_read},
+            metrics={"jitter_px": round(jitter, 3), "raw_jitter_px": round(raw_jitter, 3),
+                     "jitter_reduction": jitter_reduction, "output_frames": frames_read},
         )
