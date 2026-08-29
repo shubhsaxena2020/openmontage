@@ -46,6 +46,14 @@ PRESETS: Dict[str, Dict] = {
         "zoom": {"mode": "none", "amount": 0.0, "pivot": "center"},
         "transition": {"type": "fade", "dur_frames": 12},
     },
+    "mobile": {
+        "description": "Small-screen / mobile-vertical feel: gentle ramping with a soft "
+                       "zoom pulse so the action stays centered and readable on a narrow "
+                       "phone viewport. Referenced by docs/web-terminal-dashboard/SMALL-SCREEN.md.",
+        "ramp": {"setup_speed": 1.2, "peak_speed": 0.5},
+        "zoom": {"mode": "pulse", "amount": 0.05, "pivot": "center"},
+        "transition": {"type": "fade", "dur_frames": 16},
+    },
 }
 
 
@@ -57,6 +65,25 @@ def get_preset(name: str) -> Dict:
     if name not in PRESETS:
         raise KeyError(f"unknown motion preset: {name!r} (have {list_presets()})")
     return PRESETS[name]
+
+
+def preset_schema(name: str) -> Dict:
+    """Structured, machine-readable schema for a preset (name + params + descriptions).
+
+    Used by the `presets list` CLI subcommand and by docs tooling. Pure.
+    """
+    p = get_preset(name)
+    return {
+        "name": name,
+        "description": p.get("description", ""),
+        "ramp": dict(p["ramp"]),
+        "zoom": dict(p["zoom"]),
+        "transition": dict(p["transition"]),
+    }
+
+
+def list_presets_with_schema() -> List[Dict]:
+    return [preset_schema(n) for n in list_presets()]
 
 
 def motion_curve(name: str, n_frames: int) -> List[float]:

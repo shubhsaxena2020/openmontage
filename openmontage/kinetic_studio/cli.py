@@ -38,10 +38,37 @@ def cmd_init_config(args):
     print(f"wrote starter config -> {out}")
 
 
+def cmd_presets(args):
+    """List available motion presets and their parameter schema."""
+    from kinetic_studio.presets import list_presets_with_schema
+    schemas = list_presets_with_schema()
+    if args.json:
+        print(json.dumps(schemas, indent=2))
+        return
+    print("Available motion presets:")
+    for s in schemas:
+        print(f"  - {s['name']}: {s['description']}")
+        print(f"      ramp: setup_speed={s['ramp']['setup_speed']} "
+              f"peak_speed={s['ramp']['peak_speed']}")
+        print(f"      zoom: {s['zoom']['mode']} amount={s['zoom']['amount']} "
+              f"pivot={s['zoom']['pivot']}")
+        print(f"      transition: {s['transition']['type']} "
+              f"dur_frames={s['transition']['dur_frames']}")
+
+
 def cmd_run(args):
     cfg = KineticStudioConfig.load(args.config) if args.config else KineticStudioConfig()
     if args.brand:
         cfg.brand.name = args.brand
+    if args.preset:
+        cfg.motion.name = args.preset
+    if args.dry_run:
+        studio = KineticStudio(cfg, workdir=args.workdir)
+        plan = studio.dry_run(args.input, music=args.music, voiceover=args.voiceover,
+                               out_name=args.out)
+        print("\n=== Kinetic Studio dry-run plan (no render) ===")
+        print(json.dumps(plan, indent=2))
+        return
     studio = KineticStudio(cfg, workdir=args.workdir)
     res = studio.run(args.input, music=args.music, voiceover=args.voiceover,
                      out_name=args.out)
@@ -64,7 +91,14 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("--config", help="KineticStudioConfig json/yaml")
     r.add_argument("--workdir", default="studio_out")
     r.add_argument("--out", default="kinetic_short.mp4")
+    r.add_argument("--preset", help="motion preset name (cinematic/energetic/freeze/subtle/mobile)")
+    r.add_argument("--dry-run", action="store_true",
+                   help="print the edit plan without rendering (fast preview)")
     r.set_defaults(func=cmd_run)
+
+    pr = sub.add_parser("presets", help="list motion presets and their parameter schema")
+    pr.add_argument("--json", action="store_true", help="emit raw JSON schema")
+    pr.set_defaults(func=cmd_presets)
 
     i = sub.add_parser("init-config", help="write a starter config file")
     i.add_argument("--out", default="kinetic_studio_config.json")

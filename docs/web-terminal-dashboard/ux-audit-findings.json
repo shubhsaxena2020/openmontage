@@ -1,0 +1,47 @@
+{
+  "title": "Browser Terminal Dashboard \u2014 Small-Screen & Renderer Audit (agent-6)",
+  "date": "2026-08-29",
+  "scope": "hermes.shubhbuilds.com \u2014 ttyd 1.7.7 + xterm.js + tmux 3.4, 6-pane 3\u00d72 dashboard",
+  "tldr": [
+    "TASK 1 (small-screen): The 3\u00d72 grid has NO responsive fallback \u2014 on a narrow/phone",
+    "RECOMMENDATION: do NOT restructure; document the existing tmux mitigations, which",
+    "TASK 2 (canvas vs webgl): KEEP `rendererType=canvas`. Switching to webgl would require"
+  ],
+  "tasks": [
+    {
+      "id": "task-1",
+      "title": "SMALL-SCREEN VIABILITY",
+      "decision": "Option A. Implemented as a README note (below). No tmux/container change.",
+      "recommendations": [],
+      "body_chars": 3361
+    },
+    {
+      "id": "task-2",
+      "title": "CANVAS vs WEBGL RENDERER",
+      "decision": "KEEP `rendererType=canvas`. No production change. If webgl is ever wanted, the",
+      "recommendations": [],
+      "body_chars": 6241
+    }
+  ],
+  "changes_made": [
+    "Created /home/ubuntu/projects/agent-6/SMALL-SCREEN.md  (Task-1 documentation; the only",
+    "change implemented \u2014 a documented keybinding note, as recommended).",
+    "Live dashboard, ttyd config, docker-compose.yml, ~/.tmux.conf: UNCHANGED.",
+    "Scratch session `audit-scratch` (and `audit-probe`): created and destroyed; no residue."
+  ],
+  "sources": [
+    "ttyd 1.7.7 frontend blob (extracted from /usr/bin/ttyd, gzip @ offset 7151680):",
+    "setRendererType() \u2014 canvas/webgl/dom + onContextLoss=dispose-only.",
+    "xterm.js WebGL addon README: github.com/xtermjs/xterm.js/blob/master/addons/addon-webgl/README.md",
+    "(\"browser may drop WebGL contexts ... like OOM or after the system has been suspended\")",
+    "xterm.js PR #3276 (onContextLoss added, 2021) and VS Code issue #263159",
+    "(\"WebGL: CONTEXT_LOST_WEBGL ... terminal goes invisible\", opened 2025-08, still open)",
+    "tmux 3.4 default key table (verified live via `tmux list-keys`): z=zoom, w=choose-tree,",
+    "q=display-panes, o=cycle.",
+    "ttyd --help: `-W, --writable` (client can write to TTY) \u2014 basis for Task-1 viability.",
+    "Empirical: scratch tmux session pane sizes at 60\u00d724 and 40\u00d718; live `resize-pane -Z`",
+    "zoom test; xterm.js 5.5.0 parser-only throughput (~1.0M lines/sec)."
+  ],
+  "schema_version": "1.0",
+  "source_report": "docs/web-terminal-dashboard/UX-AUDIT-REPORT.md"
+}
