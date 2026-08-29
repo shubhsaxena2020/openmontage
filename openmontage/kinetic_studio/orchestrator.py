@@ -396,6 +396,7 @@ class KineticStudio:
             "fps": self._composition_fps(self.cfg.output.fps),
             "width": self.cfg.output.width,
             "height": self.cfg.output.height,
+            "caption_theme": self.cfg.caption.theme,
             "durationInFrames": max(60, n_frames or (len(frame_schedule) if cap_data else 300)),
         }
 

@@ -56,6 +56,7 @@ class CaptionSpec:
     language: Optional[str] = "en"
     max_words_per_line: int = 5
     highlight_color: str = "#fde047"
+    theme: str = "default"       # "default" | "caption" (Phase E.20 caption-style HUD variant)
 
 
 @dataclass

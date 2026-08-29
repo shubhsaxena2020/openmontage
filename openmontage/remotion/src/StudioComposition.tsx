@@ -2,6 +2,7 @@ import { AbsoluteFill, Series, useCurrentFrame, interpolate, Easing, Video, stat
 import { RepCounter } from "./RepCounter";
 import { ExerciseNameCard } from "./ExerciseNameCard";
 import { BrandWatermark } from "./BrandWatermark";
+import { KineticCaptions, CaptionTheme } from "./FitnessHUD";
 
 export type StudioInput = {
   video: string;
@@ -15,6 +16,7 @@ export type StudioInput = {
   fps: number;
   width: number;
   height: number;
+  caption_theme?: CaptionTheme;
 };
 
 /**
@@ -26,14 +28,8 @@ export type StudioInput = {
  * All driven by the studio_input.json produced by the Python orchestrator.
  */
 export const StudioComposition: React.FC<{ input?: StudioInput }> = ({ input }) => {
-  const frame = useCurrentFrame();
   // When rendered via studio-entry, `input` is supplied through defaultProps.
   const data = input as StudioInput;
-
-  const active = data.frame_schedule && frame < data.frame_schedule.length
-    ? data.frame_schedule[frame]
-    : -1;
-
   return (
     <AbsoluteFill style={{ backgroundColor: "#05060a" }}>
       {/* Background: the beat-synced, reframed footage */}
@@ -54,48 +50,14 @@ export const StudioComposition: React.FC<{ input?: StudioInput }> = ({ input }) 
       <RepCounter reps={0} target={12} label="REPS" accent={data.accent} />
       <BrandWatermark brand={data.brand} sub={data.watermark_sub} />
 
-      {/* Kinetic captions */}
-      <AbsoluteFill
-        style={{
-          justifyContent: "flex-end",
-          alignItems: "center",
-          paddingBottom: 120,
-          pointerEvents: "none",
-        }}
-      >
-        <div
-          style={{
-            display: "flex",
-            flexWrap: "wrap",
-            justifyContent: "center",
-            gap: 8,
-            maxWidth: "82%",
-            background: "rgba(0,0,0,0.42)",
-            borderRadius: 16,
-            padding: "14px 22px",
-          }}
-        >
-          {(data.words || [])
-            .slice(Math.max(0, active - 3), active + 4)
-            .map((w) => {
-              const isActive = w.index === active;
-              return (
-                <span
-                  key={w.index}
-                  style={{
-                    fontSize: 36,
-                    fontWeight: isActive ? 900 : 600,
-                    color: isActive ? "#fde047" : "rgba(255,255,255,0.55)",
-                    transform: isActive ? "scale(1.08)" : "scale(1)",
-                    transition: "transform 80ms linear",
-                  }}
-                >
-                  {w.word}
-                </span>
-              );
-            })}
-        </div>
-      </AbsoluteFill>
+      {/* Kinetic captions — theme selectable via studio_input.caption_theme
+          ("default" | "caption"); defaults to the v1.1 look. */}
+      <KineticCaptions
+        words={data.words || []}
+        frame_schedule={data.frame_schedule || []}
+        fps={data.fps || 30}
+        theme={data.caption_theme || "default"}
+      />
     </AbsoluteFill>
   );
 };

@@ -1,0 +1,13 @@
+{
+  "step": "kinetic_ramper",
+  "sample": "openmontage/samples/samples/athlete_16x9.mp4",
+  "runs": 3,
+  "successful_runs": 3,
+  "errors": 0,
+  "p50_sec": 2.085,
+  "p90_sec": 2.085,
+  "min_sec": 1.914,
+  "max_sec": 2.114,
+  "mean_sec": 2.038,
+  "host": "CPU-only (.venv-om); no GPU assumed"
+}

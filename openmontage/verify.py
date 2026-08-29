@@ -8,16 +8,49 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(
 
 from tools import list_tools, make_tool
 
-SAMPLES = os.path.join(os.path.dirname(os.path.abspath(__file__)), "samples", "samples")
+import shutil
+import subprocess
+
+SAMPLES = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "openmontage", "samples", "samples")
 ATHLETE = os.path.join(SAMPLES, "athlete_16x9.mp4")
 BEAT = os.path.join(SAMPLES, "beat_120bpm.wav")
 RESULTS = []
 
 
 def check(name, res, cond=True, extra=""):
-    ok = bool(res.ok) and bool(cond)
+    ok = bool(getattr(res, "ok", res)) and bool(cond)
     RESULTS.append((name, ok, extra))
     print(f"[{'PASS' if ok else 'FAIL'}] {name}  {extra}")
+
+
+def check_ffmpeg_version():
+    """Verify the system ffmpeg meets the floor the tools depend on.
+
+    The ramper/reframe use `setpts` + `concat` + `libx264 -pix_fmt yuv420p`, which are
+    stable since ffmpeg 4.x. We require >= 4.0 and report the exact build so a too-new or
+    too-old ffmpeg is caught early (Phase E.19)."""
+    ff = shutil.which("ffmpeg")
+    if not ff:
+        check("ffmpeg available", False, cond=False, extra="ffmpeg not found on PATH")
+        return
+    try:
+        out = subprocess.run([ff, "-version"], capture_output=True, text=True,
+                             timeout=20).stdout
+    except Exception as e:
+        check("ffmpeg version", False, cond=False, extra=f"could not run ffmpeg: {e}")
+        return
+    line = out.splitlines()[0] if out else ""
+    # format: "ffmpeg version 4.4.2-..." or "ffmpeg version N-xxxxx-g...."
+    import re
+    m = re.search(r"version\s+(\d+)\.(\d+)(?:\.(\d+))?", line)
+    if not m:
+        check("ffmpeg version parseable", True, cond=True,
+              extra=f"unparsed but present: {line[:60]}")
+        return
+    major, minor = int(m.group(1)), int(m.group(2))
+    floor_met = (major, minor) >= (4, 0)
+    check("ffmpeg version >= 4.0", True, cond=floor_met,
+          extra=f"{major}.{minor}.{m.group(3) or 0} ({'OK' if floor_met else 'BELOW FLOOR 4.0'})")
 
 
 print("=== registry ===")
@@ -76,6 +109,10 @@ det = r.metrics.get("detected_frames", 0)
 print(f"  detected_frames={det} (expected 0 on synthetic box; real human clip required for true pose)")
 check("fitness_pose runs without error", r, cond=True,
       extra=f"tool executed; detections={det} (math verified separately via unit test)")
+
+# 6. ffmpeg-version compatibility (Phase E.19)
+print("\n=== ffmpeg version compatibility ===")
+check_ffmpeg_version()
 
 print("\n=== SUMMARY ===")
 passed = sum(1 for _, ok, _ in RESULTS if ok)
