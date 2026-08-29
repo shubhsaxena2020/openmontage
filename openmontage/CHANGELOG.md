@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.4.0 — Phase E stretch
+- **Render benchmark** (`scripts/benchmark_render.py`): runs the kinetic ramper N times on the
+  sample asset and records p50/p90/max. `docs/benchmark-render.json` reports **p50 ≈ 2.09s/run**
+  on CPU (.venv-om).
+- **ffmpeg-version compatibility check**: `verify.py` now runs `ffmpeg -version`, floors at
+  >= 4.0, and reports the exact build (now 6/6 checks pass).
+- **Caption-style HUD theme variant**: `KineticCaptions` gains a selectable `theme`
+  (`default` | `caption`); the `caption` variant is larger/centered/brighter for vertical
+  phone playback. Wired through `StudioComposition` → `studio_input.caption_theme` and
+  `CaptionSpec.theme` (config-driven, defaults to `default`).
+
 ## 1.3.0 — Phase B/C feature + test program
 - **Presets CLI** (`kinetic_studio presets`): list all motion presets with their full
   parameter schema (text or `--json`); new pure helpers `preset_schema()` /
