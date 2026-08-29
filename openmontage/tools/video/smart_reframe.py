@@ -1,18 +1,20 @@
 """PHASE A.3 — Smart vertical auto-reframe.
 
-Crop a 16:9 source to 9:16 while keeping the athlete centered, with jitter-free tracking.
+Crops a 16:9 source to 9:16 while keeping the athlete centered, with jitter-free tracking.
 The athlete region is taken from a per-frame bounding box (provided via `boxes` JSON, or
 derived from YOLOv8-pose keypoints if `use_pose=True`). The target crop center is smoothed
 with an exponential moving average + dead-band (hysteresis) so the frame does not jitter
-when the subject is nearly stationary. Renders an output 9:16 video via OpenCV.
-
-No GPU required. Produces a real rendered file (the "render test confirming smooth
-tracking" the brief asks for). Jitter is quantified in `metrics.jitter_px`.
+when the subject is nearly stationary. Renders a real 9:16 H.264 video (OpenCV writes the
+draft, then ffmpeg transcodes to H.264/yuv420p so downstream tools — the ramper and
+Remotion — consume it without the duplicate-frame artifacts of OpenCV's mp4v writer).
+Jitter is quantified in `metrics.jitter_px`.
 """
 from __future__ import annotations
 
 import json
 import os
+import shutil
+import subprocess
 from typing import Any, Dict, List, Optional
 
 import numpy as np
@@ -124,11 +126,27 @@ class SmartReframeTool(BaseTool):
         jitter = float(np.linalg.norm(smooth_deltas, axis=1).mean())
         jitter_reduction = round(1.0 - (jitter / (raw_jitter + 1e-9)), 3)
 
-        # render
+        # render. Prefer piping frames straight to ffmpeg (rawvideo -> H.264/yuv420p):
+        # OpenCV's mp4v writer emits duplicate/near-duplicate frames on this headless
+        # build (and Remotion's headless Chromium can't decode mp4v). H.264 keeps frames
+        # 1:1 and is consumable by the ramper + Remotion. Fall back to cv2 mp4v only if
+        # ffmpeg is unavailable.
+        ff = shutil.which("ffmpeg")
         cap = cv2.VideoCapture(p["input_path"])
-        fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-        vw = cv2.VideoWriter(p["out_path"], fourcc, fps, (tw, th))
         i = 0
+        ffmpeg_proc = None
+        if ff:
+            ffmpeg_proc = subprocess.Popen(
+                [ff, "-y", "-f", "rawvideo", "-pix_fmt", "rgb24",
+                 "-s", f"{tw}x{th}", "-r", str(fps), "-i", "-",
+                 "-an", "-c:v", "libx264", "-pix_fmt", "yuv420p",
+                 "-preset", "veryfast", p["out_path"]],
+                stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        vw = None
+        if ffmpeg_proc is None:
+            fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+            vw = cv2.VideoWriter(p["out_path"], fourcc, fps, (tw, th))
+
         while True:
             ok, frame = cap.read()
             if not ok:
@@ -146,10 +164,20 @@ class SmartReframeTool(BaseTool):
                 h_, w_ = crop.shape[:2]
                 pad_img[:h_, :w_] = crop
                 crop = pad_img
-            vw.write(crop)
+            if ffmpeg_proc is not None:
+                ffmpeg_proc.stdin.write(crop.astype(np.uint8).tobytes())  # type: ignore
+            else:
+                vw.write(crop)  # type: ignore
             i += 1
         cap.release()
-        vw.release()
+        if ffmpeg_proc is not None:
+            try:
+                ffmpeg_proc.stdin.close()  # type: ignore
+            except Exception:
+                pass
+            ffmpeg_proc.wait()
+        else:
+            vw.release()  # type: ignore
 
         if not os.path.exists(p["out_path"]):
             return ToolResult(ok=False, error="render failed (no output file)")
