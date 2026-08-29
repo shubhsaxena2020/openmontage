@@ -137,6 +137,109 @@ class KineticStudio:
         """The Remotion HUD composite is skipped in preview mode (draft only)."""
         return (not self.cfg.preview) and (os.environ.get("KINETIC_HEADLESS") != "1")
 
+    # ---- dry run -------------------------------------------------------------
+    def dry_run(self, input_video: str, music: Optional[str] = None,
+                voiceover: Optional[str] = None,
+                out_name: str = "kinetic_short.mp4") -> Dict[str, Any]:
+        """Compute the edit plan WITHOUT rendering (fast preview).
+
+        Walks the same decision path as ``run`` but short-circuits before any ffmpeg
+        render (reframe / ramper / Remotion / mux). It probes the clip for fps/duration,
+        resolves the audio-sync anchors and the chosen preset's motion plan, and reports
+        exactly which heavy steps ``run`` would perform. No output file is produced.
+
+        Used by the CLI ``--dry-run`` flag. Pure with respect to rendering; the only
+        side effects are reading the input file's metadata (cv2 probe) and listing the
+        planned steps.
+        """
+        input_video = str(input_video)
+
+        # clip probe (metadata only)
+        fps = 30.0
+        n_frames = 0
+        duration = 0.0
+        try:
+            import cv2  # type: ignore
+            cap = cv2.VideoCapture(input_video)
+            _fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+            _n = cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0
+            fps = float(_fps) if _fps else 30.0
+            n_frames = int(_n)
+            duration = float(n_frames) / float(fps) if fps else 0.0
+            cap.release()
+        except Exception:
+            pass
+
+        # audio strategy (what run would do)
+        audio = music or voiceover
+        audio_strategy = (
+            "use provided track" if audio else "extract from video (ffmpeg)"
+        )
+
+        # preset motion plan (pure) — what the ramper/zoom would follow.
+        # Only build it when the clip was actually probed; otherwise report a note
+        # instead of a degenerate plan with negative timestamps.
+        preset_name = self.cfg.motion.name
+        if n_frames > 0 and fps > 0:
+            try:
+                from kinetic_studio import presets as P
+                motion_plan = P.build_motion_plan(
+                    preset_name, int(fps), n_frames,
+                    drop_times=None,
+                    width=self.cfg.output.width, height=self.cfg.output.height)
+            except Exception as e:  # preset missing -> still report the plan
+                motion_plan = {"error": str(e)}
+        else:
+            motion_plan = {"note": "clip not probed (missing/unreadable); plan pending a valid input",
+                           "preset": preset_name}
+
+        # audio-sync anchors that run would resolve (beats + markers + voice peaks)
+        anchors: List[float] = list(self.cfg.ramp.markers)
+        if music or (voiceover is None):
+            # beats come from the beat map; we list markers as the explicit anchors here
+            pass
+
+        dims = self.render_dims()
+        plan = {
+            "input": input_video,
+            "out_name": out_name,
+            "preview": self.cfg.preview,
+            "output_dims": dims,
+            "audio_strategy": audio_strategy,
+            "audio_for_beats": bool(audio),
+            "preset": preset_name,
+            "motion_plan": motion_plan,
+            "explicit_anchors": anchors,
+            "steps": [
+                {"step": "audio", "would_run": True,
+                 "detail": audio_strategy},
+                {"step": "beats", "would_run": bool(audio),
+                 "detail": "beat_drop_mapper (librosa)" if audio else "skipped (no audio)"},
+                {"step": "energy", "would_run": True,
+                 "detail": "motion_energy (openCV diff)"},
+                {"step": "pose", "would_run": self.cfg.pose.enabled,
+                 "detail": "fitness_pose (YOLOv8, CPU)" if self.cfg.pose.enabled else "disabled"},
+                {"step": "boxes", "would_run": True, "detail": "box_tracker"},
+                {"step": "reframe", "would_run": True,
+                 "detail": f"smart_reframe -> {dims['width']}x{dims['height']} (ffmpeg, RENDER)"},
+                {"step": "captions", "would_run": bool(self.cfg.caption.enabled and voiceover),
+                 "detail": "kinetic_word_sync (faster-whisper)" if voiceover else "no voiceover"},
+                {"step": "ramper", "would_run": True,
+                 "detail": "kinetic_ramper (ffmpeg setpts, RENDER)"},
+                {"step": "studio_composite", "would_run": self.should_render_studio(),
+                 "detail": "Remotion HUD (RENDER, browser)" if self.should_render_studio()
+                           else "skipped (preview or no browser)"},
+                {"step": "mux_music", "would_run": bool(music),
+                 "detail": "mux music under short (ffmpeg)" if music else "no separate music"},
+            ],
+            "render_steps": [s["step"] for s in [
+                {"step": "reframe"}, {"step": "ramper"},
+                {"step": "studio_composite"} if self.should_render_studio() else {"step": "x"},
+                {"step": "mux_music"} if music else {"step": "x"},
+            ] if s["step"] != "x"],
+        }
+        return plan
+
     # ---- main ----------------------------------------------------------------
     def run(self, input_video: str, music: Optional[str] = None,
             voiceover: Optional[str] = None, out_name: str = "kinetic_short.mp4") -> StudioRunResult:
