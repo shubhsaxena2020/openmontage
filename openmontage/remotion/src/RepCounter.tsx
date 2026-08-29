@@ -1,4 +1,4 @@
-import { AbsoluteFill, useCurrentFrame, interpolate, spring } from "remotion";
+import { AbsoluteFill, useCurrentFrame, interpolate, spring, useVideoConfig } from "remotion";
 
 /**
  * RepCounter — large kinetic rep counter with a pop/scale animation on each increment.
@@ -12,8 +12,10 @@ export const RepCounter: React.FC<{
   accent?: string;
 }> = ({ reps, target, label = "REPS", accent = "#22d3ee" }) => {
   const frame = useCurrentFrame();
-  // pop animation: scale peaks right after a rep boundary (every rep assumed ~ cadence)
-  const pop = spring({ frame: frame % 12, fps: 30, config: { damping: 12 } });
+  const { fps } = useVideoConfig();
+  // pop animation: scale peaks right after a rep boundary. Tied to the composition fps
+  // (NOT hardcoded) so the pop cadence is correct at 30 or 60 fps.
+  const pop = spring({ frame: frame % Math.round(fps * 0.4), fps, config: { damping: 12 } });
   const scale = interpolate(pop, [0, 1], [1, 1.18]);
   const pct = target ? Math.min(100, Math.round((reps / target) * 100)) : null;
 

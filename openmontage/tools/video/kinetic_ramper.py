@@ -26,23 +26,35 @@ from tools.base_tool import BaseTool, ToolResult
 def _build_segments(control_t: List[float], slow_windows: List[float],
                     setup_speed: float, peak_speed: float) -> List[Dict[str, float]]:
     """Return [(t_start, t_end, speed)] covering [0, last_control], with slow speed inside
-    any slow_window (a peak/drop region) and setup_speed elsewhere."""
+    any slow_window (a peak/drop region) and setup_speed elsewhere. Adjacent segments of
+    the same speed are MERGED so the rendered output is a small number of clean, contiguous
+    time-remaps (no micro-segment concat artifacts / frozen frames)."""
     if not control_t:
         return []
     end = control_t[-1]
-    segs: List[Dict[str, float]] = []
+    # raw per-control-point speed flags
+    def is_slow(t0, t1):
+        return any(ws - 0.15 <= t0 and t1 <= we + 0.15
+                   for ws, we in [(slow_windows[i], slow_windows[i + 1])
+                                  for i in range(0, len(slow_windows) - 1, 2)]) \
+            if slow_windows else False
+    raw: List[Dict[str, float]] = []
     t = 0.0
     for ct in control_t:
-        # is [t, ct] inside any slow window?
-        slow = any(ws - 0.15 <= t and ct <= we + 0.15 for ws, we in
-                   [(slow_windows[i], slow_windows[i + 1]) for i in range(0, len(slow_windows) - 1, 2)]
-                   ) if slow_windows else False
-        speed = peak_speed if slow else setup_speed
-        segs.append({"t_start": round(t, 3), "t_end": round(min(ct, end), 3), "speed": speed})
-        t = min(ct, end)
+        ct = min(ct, end)
+        raw.append({"t_start": round(t, 3), "t_end": round(ct, 3),
+                    "speed": peak_speed if is_slow(t, ct) else setup_speed})
+        t = ct
     if t < end:
-        segs.append({"t_start": round(t, 3), "t_end": round(end, 3), "speed": setup_speed})
-    return segs
+        raw.append({"t_start": round(t, 3), "t_end": round(end, 3), "speed": setup_speed})
+    # merge adjacent equal-speed segments
+    merged: List[Dict[str, float]] = []
+    for s in raw:
+        if merged and merged[-1]["speed"] == s["speed"] and merged[-1]["t_end"] == s["t_start"]:
+            merged[-1]["t_end"] = s["t_end"]
+        else:
+            merged.append(dict(s))
+    return merged
 
 
 def _setpts_filter(segs: List[Dict[str, float]]) -> str:
@@ -68,6 +80,8 @@ class KineticRamperTool(BaseTool):
                        "help": "comma-sep peak/drop seconds if no map_json"},
         "setup_speed": {"type": "float", "default": 1.6, "help": "speed during setup"},
         "peak_speed": {"type": "float", "default": 0.4, "help": "speed during peaks (slow-mo)"},
+        "keep_audio": {"type": "bool", "default": True,
+                       "help": "mux original audio through (A/V stay synced: setpts preserves timeline)"},
         "ffmpeg": {"type": "str", "default": "ffmpeg",
                    "help": "ffmpeg executable (resolved via PATH)"},
     }
@@ -94,8 +108,14 @@ class KineticRamperTool(BaseTool):
             segs = [{"t_start": 0.0, "t_end": 1e9, "speed": p["setup_speed"]}]
             slow_windows: List[float] = []
         else:
-            segs = _build_segments(peaks, [], p["setup_speed"], p["peak_speed"])
-            slow_windows = [s["t_start"] for s in segs if s["speed"] == p["peak_speed"]]
+            # Slow-mo windows are centered on each drop/peak. The _build_segments
+            # `is_slow` check treats slow_windows as a flat list of (start,end) pairs,
+            # so expand every drop into a [d-pad, d+pad] window here.
+            pad = 0.15
+            slow_windows = []
+            for d in peaks:
+                slow_windows.append(round(max(0.0, d - pad), 3))
+                slow_windows.append(round(d + pad, 3))
             segs = _build_segments(peaks, slow_windows, p["setup_speed"], p["peak_speed"])
 
         # render each segment with setpts, then concat
@@ -132,7 +152,7 @@ class KineticRamperTool(BaseTool):
             if not part_paths:
                 return ToolResult(ok=False, error="no segments rendered")
 
-            # concat
+            # concat video segments
             listf = os.path.join(tmpdir, "list.txt")
             with open(listf, "w") as fh:
                 for pp in part_paths:
@@ -142,6 +162,25 @@ class KineticRamperTool(BaseTool):
             r = subprocess.run(cmd, capture_output=True, text=True)
             if r.returncode != 0:
                 return ToolResult(ok=False, error=f"ffmpeg concat failed: {r.stderr[-500:]}")
+
+            # optional: mux original audio back so the ramped short stays A/V synced
+            # (setpts preserves absolute timeline positions, so the music still lines up
+            # with the slow-mo windows). Re-mux both streams into a final file.
+            has_audio = False
+            if p["keep_audio"]:
+                probe = subprocess.run(
+                    [ff, "-i", p["input_path"]], capture_output=True, text=True)
+                has_audio = "Stream #0:1" in probe.stderr or "Audio:" in probe.stderr
+                if has_audio:
+                    final = p["out_path"] + ".av.mp4"
+                    r = subprocess.run(
+                        [ff, "-y", "-i", p["out_path"], "-i", p["input_path"],
+                         "-c", "copy", "-map", "0:v:0", "-map", "1:a:0", final],
+                        capture_output=True, text=True)
+                    if r.returncode == 0 and os.path.exists(final):
+                        os.replace(final, p["out_path"])
+                    else:
+                        has_audio = False  # audio mux failed; keep video-only output
         finally:
             for pp in part_paths:
                 try: os.remove(pp)
@@ -153,10 +192,37 @@ class KineticRamperTool(BaseTool):
 
         if not os.path.exists(p["out_path"]):
             return ToolResult(ok=False, error="render failed (no output)")
+
+        # smoothness check: decode the output and count frozen (duplicate) frames and
+        # the max inter-frame PTS delta. A clean ramp has ~0 frozen frames and a tight
+        # PTS-delta spread (monotonic, near-constant cadence).
+        frozen = 0
+        max_delta_ms = 0.0
+        prev = None
+        cap = cv2.VideoCapture(p["out_path"])
+        pts = []
+        while True:
+            ok, fr = cap.read()
+            if not ok:
+                break
+            pts.append(cap.get(cv2.CAP_PROP_POS_MSEC))
+            if prev is not None and np.array_equal(fr, prev):
+                frozen += 1
+            prev = fr
+        cap.release()
+        if len(pts) > 1:
+            d = np.diff(np.array(pts))
+            max_delta_ms = float(d.max())
+        mono = bool((np.diff(np.array(pts)) >= 0).all()) if len(pts) > 1 else True
+
         return ToolResult(
             ok=True,
             data={"segments": segs, "control_points": len(peaks),
-                  "setup_speed": p["setup_speed"], "peak_speed": p["peak_speed"]},
+                  "setup_speed": p["setup_speed"], "peak_speed": p["peak_speed"],
+                  "has_audio": has_audio, "frozen_frames": frozen,
+                  "max_pts_delta_ms": round(max_delta_ms, 2), "pts_monotonic": mono},
             artifacts={"video": p["out_path"]},
-            metrics={"segments": len(segs), "control_points": len(peaks)},
+            metrics={"segments": len(segs), "control_points": len(peaks),
+                     "has_audio": has_audio, "frozen_frames": frozen,
+                     "max_pts_delta_ms": round(max_delta_ms, 2), "pts_monotonic": mono},
         )

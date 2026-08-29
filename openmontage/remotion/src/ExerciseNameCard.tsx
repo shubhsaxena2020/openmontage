@@ -1,4 +1,4 @@
-import { AbsoluteFill, useCurrentFrame, interpolate, spring } from "remotion";
+import { AbsoluteFill, useCurrentFrame, interpolate, spring, useVideoConfig } from "remotion";
 
 /**
  * ExerciseNameCard — slides in from the left with the exercise name + a set/duration chip.
@@ -10,7 +10,8 @@ export const ExerciseNameCard: React.FC<{
   accent?: string;
 }> = ({ name, detail, accent = "#f472b6" }) => {
   const frame = useCurrentFrame();
-  const inX = spring({ frame, fps: 30, config: { damping: 14 } });
+  const { fps } = useVideoConfig();
+  const inX = spring({ frame, fps, config: { damping: 14 } });
   const x = interpolate(inX, [0, 1], [-420, 0]);
   const opacity = interpolate(inX, [0, 1], [0, 1]);
 
