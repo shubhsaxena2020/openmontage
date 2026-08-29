@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.pyc
+.venv-om/
+*.egg-info/
+*.pt
+yolov8n-pose.pt
+
+# Remotion
+node_modules/
+build/
+
+# generated verification artifacts (regenerable)
+openmontage/pipeline_out/
+openmontage/samples/samples/*.mp4
+openmontage/samples/samples/*.wav
+openmontage/samples/samples/*.json
+openmontage/remotion/out/
+
+# OS
+.DS_Store

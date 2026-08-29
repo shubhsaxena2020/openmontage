@@ -1,0 +1,65 @@
+{
+  "name": "fitness_reel",
+  "description": "End-to-end fitness highlight reel: analyze motion+pose, detect beats, reframe to 9:16, tempo-ramp to the music, and burn-in kinetic captions from real speech.",
+  "inputs": {
+    "clip": "samples/samples/athlete_16x9.mp4",
+    "boxes": "samples/samples/boxes.json",
+    "music": "samples/samples/beat_120bpm.wav",
+    "speech": "samples/samples/speech.wav"
+  },
+  "steps": [
+    {
+      "id": "beats",
+      "tool": "beat_drop_mapper",
+      "params": { "audio_path": "${inputs.music}", "out_json": "pipeline_out/beats.json" },
+      "out": "pipeline_out/beats.json",
+      "primary": "json"
+    },
+    {
+      "id": "energy",
+      "tool": "motion_energy",
+      "params": { "input_path": "${inputs.clip}", "method": "diff", "out_json": "pipeline_out/energy.json" },
+      "out": "pipeline_out/energy.json",
+      "primary": "json"
+    },
+    {
+      "id": "pose",
+      "tool": "fitness_pose",
+      "params": { "input_path": "${inputs.clip}", "model": "yolov8n-pose.pt", "max_frames": 60, "out_json": "pipeline_out/pose.json" },
+      "out": "pipeline_out/pose.json",
+      "primary": "json"
+    },
+    {
+      "id": "ramper",
+      "tool": "kinetic_ramper",
+      "params": {
+        "input_path": "${inputs.clip}",
+        "map_json": "${beats.json}",
+        "out_path": "pipeline_out/ramped.mp4",
+        "setup_speed": 1.6,
+        "peak_speed": 0.4
+      },
+      "out": "pipeline_out/ramped.mp4"
+    },
+    {
+      "id": "reframe",
+      "tool": "smart_reframe",
+      "params": {
+        "input_path": "${inputs.clip}",
+        "boxes_json": "${inputs.boxes}",
+        "out_path": "pipeline_out/reframed.mp4",
+        "target_w": 540,
+        "alpha": 0.25,
+        "deadband": 6
+      },
+      "out": "pipeline_out/reframed.mp4"
+    },
+    {
+      "id": "captions",
+      "tool": "kinetic_word_sync",
+      "params": { "audio_path": "${inputs.speech}", "model": "tiny", "language": "en", "out_json": "pipeline_out/captions.json" },
+      "out": "pipeline_out/captions.json",
+      "primary": "json"
+    }
+  ]
+}
