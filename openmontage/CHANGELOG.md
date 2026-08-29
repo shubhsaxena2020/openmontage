@@ -1,5 +1,29 @@
 # Changelog
 
+## 1.3.0 — Phase B/C feature + test program
+- **Presets CLI** (`kinetic_studio presets`): list all motion presets with their full
+  parameter schema (text or `--json`); new pure helpers `preset_schema()` /
+  `list_presets_with_schema()`.
+- **Small-screen (mobile) preset**: `mobile` — gentle ramp + soft zoom pulse for narrow
+  phone viewports; referenced by `docs/web-terminal-dashboard/SMALL-SCREEN.md`. Selectable
+  via `--preset mobile` or config.
+- **`--dry-run` edit-plan mode**: `KineticStudio.dry_run()` returns the full edit plan
+  (clip probe, audio strategy, preset motion plan, anchors, and the heavy steps `run()`
+  would perform) **without rendering**. Wired as `run --dry-run [--preset X]`.
+- **UX-AUDIT JSON export** (`scripts/export_ux_audit.py`): parses the browser-terminal
+  `UX-AUDIT-REPORT.md` into structured `docs/web-terminal-dashboard/ux-audit-findings.json`
+  (tldr / tasks w/ decisions / changes / sources) for tracking/diffing.
+- **Test & coverage** (Phase B): `tests/COVERAGE_MAP.md` documents per-module coverage for
+  all 7 engine tools + product layer + HUD; `tests/test_ramper_edgecases.py` adds 10 fast,
+  no-ffmpeg unit tests for the ramper's render-independent helpers (empty→uniform segment,
+  segment merge, end-clamp, zero-length skip, overshoot, anchor snap/dedupe). Full suite
+  baseline: 69 passed.
+
+## 1.2.0 — Repo hygiene
+- Deleted 6 stale merged `feat/*` branches; flipped GitHub default branch to `master`.
+- Promoted `SMALL-SCREEN.md` + `UX-AUDIT-REPORT.md` into `docs/web-terminal-dashboard/`.
+- Fixed `verify.py` stale tool-count assertion (5→7) so the cold health check is honest again.
+
 ## 1.1.0 — Kinetic Studio roadmap batch
 - **Motion presets** (`kinetic_studio/presets.py`): cinematic / energetic / freeze / subtle,
   each with a testable curve shape and a pure `build_motion_plan()`.
