@@ -1,6 +1,6 @@
 # Kinetic Studio — Python dependencies
-# Install on the laptop (Windows) with the venv active:
-#   pip install -r tools/studio/requirements.txt
+# Install on the laptop (Windows) with the venv active, from the OpenMontage root:
+#   pip install -r kinetic_studio/requirements.txt
 # For a CUDA GPU, replace the torch/torchvision lines with the CUDA wheels from
 # https://pytorch.org (e.g. pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121)
 
