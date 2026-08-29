@@ -8,10 +8,11 @@ from tools.analysis.motion_energy import MotionEnergyTool
 from tools.video.smart_reframe import SmartReframeTool
 from tools.video.kinetic_ramper import KineticRamperTool
 from tools.audio.beat_drop_mapper import BeatDropMapperTool
+from tools.audio.audio_master_duck import AudioMasterDuckTool
 from tools.subtitle.kinetic_word_sync import KineticWordSyncTool
 
 __all__ = [
     "BaseTool", "ToolResult", "register", "get_tool", "list_tools", "make_tool",
     "FitnessPoseTool", "MotionEnergyTool", "SmartReframeTool",
-    "KineticRamperTool", "BeatDropMapperTool", "KineticWordSyncTool",
+    "KineticRamperTool", "BeatDropMapperTool", "AudioMasterDuckTool", "KineticWordSyncTool",
 ]

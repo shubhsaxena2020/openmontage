@@ -1,0 +1,26 @@
+{
+  "name": "auto_duck",
+  "description": "Auto-duck a music track under a voice-over / sfx track and mix them, producing reel-ready audio. Pairs with beat_drop_mapper + kinetic_ramper for a fully scored fitness short.",
+  "inputs": {
+    "music": "samples/samples/beat_120bpm.wav",
+    "voice": "samples/samples/speech.wav"
+  },
+  "steps": [
+    {
+      "id": "duck",
+      "tool": "audio_master_duck",
+      "params": {
+        "music_path": "${inputs.music}",
+        "voice_path": "${inputs.voice}",
+        "out_music": "pipeline_out/ducked_music.wav",
+        "out_mix": "pipeline_out/ducked_mix.wav",
+        "out_json": "pipeline_out/duck.json",
+        "duck_gain": 0.25,
+        "attack_ms": 80,
+        "release_ms": 250
+      },
+      "out": "pipeline_out/ducked_mix.wav",
+      "primary": "mix"
+    }
+  ]
+}
