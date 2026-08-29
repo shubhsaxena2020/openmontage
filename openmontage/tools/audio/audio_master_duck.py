@@ -144,6 +144,14 @@ class AudioMasterDuckTool(BaseTool):
         # resample voice to music rate so frames line up
         if sr_v != sr_m:
             voice_mono = _resample_mono(voice_mono, sr_v, sr_m)
+        # Align voice to the MUSIC timeline: the duck is applied to the music track, so
+        # the voice trigger envelope must share music's hop grid (same length in samples).
+        # Trim or pad the resampled voice to music's sample count before envelopeing.
+        n_m = len(music_mono)
+        if len(voice_mono) > n_m:
+            voice_mono = voice_mono[:n_m]
+        elif len(voice_mono) < n_m:
+            voice_mono = np.pad(voice_mono, (0, n_m - len(voice_mono)))
         dur = float(len(music_mono) / sr_m)
 
         # --- voice RMS envelope ---

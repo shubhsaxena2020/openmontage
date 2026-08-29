@@ -1,0 +1,24 @@
+{
+  "name": "build_fitness_short",
+  "description": "End-to-end OpenMontage pipeline: turns raw 16:9 gym footage + music + voiceover into the ingredients of a beat-synced 9:16 vertical short. Chains Phase A (beats, motion energy, smart reframe) -> Phase B.5 (kinetic ramper, tempo-synced to drops) -> Phase C (word-sync captions) -> audio auto-duck. The Remotion HUD/composite + final music mux are applied by kinetic_studio/orchestrator.py (needs a browser); this declarative def is the headless, CI-runnable engine chain and produces every media artifact the composite consumes.",
+  "inputs": {
+    "clip": "samples/samples/athlete_16x9.mp4",
+    "boxes": "samples/samples/boxes.json",
+    "music": "samples/samples/beat_120bpm.wav",
+    "voice": "samples/samples/speech.wav"
+  },
+  "steps": [
+    { "id": "beats", "tool": "beat_drop_mapper",
+      "params": { "audio_path": "${inputs.music}", "out_json": "b_fs_beats.json" }, "out": "b_fs_beats.json", "primary": "json" },
+    { "id": "energy", "tool": "motion_energy",
+      "params": { "input_path": "${inputs.clip}", "method": "diff", "out_json": "b_fs_energy.json" }, "out": "b_fs_energy.json", "primary": "json" },
+    { "id": "reframe", "tool": "smart_reframe",
+      "params": { "input_path": "${inputs.clip}", "boxes_json": "${inputs.boxes}", "out_path": "b_fs_reframed.mp4", "target_w": 540, "alpha": 0.25, "deadband": 6 }, "out": "b_fs_reframed.mp4" },
+    { "id": "ramper", "tool": "kinetic_ramper",
+      "params": { "input_path": "${reframe}", "map_json": "${beats.json}", "out_path": "b_fs_ramped.mp4", "setup_speed": 1.6, "peak_speed": 0.4, "keep_audio": false }, "out": "b_fs_ramped.mp4" },
+    { "id": "captions", "tool": "kinetic_word_sync",
+      "params": { "audio_path": "${inputs.voice}", "model": "tiny", "language": "en", "out_json": "b_fs_captions.json" }, "out": "b_fs_captions.json", "primary": "json" },
+    { "id": "duck", "tool": "audio_master_duck",
+      "params": { "music_path": "${inputs.music}", "voice_path": "${inputs.voice}", "duck_gain": 0.25, "out_music": "b_fs_ducked.wav", "out_json": "b_fs_duck.json" }, "out": "b_fs_ducked.wav", "primary": "music" }
+  ]
+}
