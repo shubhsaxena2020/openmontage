@@ -77,6 +77,12 @@ class SmartReframeTool(BaseTool):
 
         tw = p["target_w"]
         th = int(tw * 16 / 9)  # 9:16 => height = width*16/9
+        # libx264 requires even dimensions; force both even (odd heights make ffmpeg exit
+        # with a "width or height" error and break the input pipe -> BrokenPipeError).
+        tw -= tw % 2
+        th -= th % 2
+        if tw < 2 or th < 2:
+            return ToolResult(ok=False, error=f"invalid target size {tw}x{th}")
 
         # gather per-frame box centers
         boxes: Dict[int, List[float]] = {}

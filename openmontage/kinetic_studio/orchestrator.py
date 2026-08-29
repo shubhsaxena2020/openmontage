@@ -116,6 +116,27 @@ class KineticStudio:
             self._step("mux_audio", False, str(e))
             return False
 
+    # ---- preview / proxy mode -------------------------------------------------
+    PREVIEW_HEIGHT = 360  # proxy draft resolution (keeps 9:16 aspect)
+
+    def render_dims(self) -> Dict[str, int]:
+        """Output dimensions, dropping to proxy resolution when in preview mode.
+
+        Dimensions are forced to even numbers because libx264 requires them (odd widths
+        make ffmpeg exit and break the reframe pipe)."""
+        w, h = self.cfg.output.width, self.cfg.output.height
+        if self.cfg.preview:
+            h = min(h, self.PREVIEW_HEIGHT)
+            w = max(2, round(h * self.cfg.output.width / self.cfg.output.height))
+        # force even (libx264 constraint)
+        w = w - (w % 2)
+        h = h - (h % 2)
+        return {"width": w, "height": h}
+
+    def should_render_studio(self) -> bool:
+        """The Remotion HUD composite is skipped in preview mode (draft only)."""
+        return (not self.cfg.preview) and (os.environ.get("KINETIC_HEADLESS") != "1")
+
     # ---- main ----------------------------------------------------------------
     def run(self, input_video: str, music: Optional[str] = None,
             voiceover: Optional[str] = None, out_name: str = "kinetic_short.mp4") -> StudioRunResult:
@@ -170,9 +191,10 @@ class KineticStudio:
         self._step("boxes", len(boxes) > 0, f"{len(boxes)} boxes", boxes_json)
 
         # 6) smart reframe -> 9:16
+        dims = self.render_dims()
         reframed = str(self.work / "reframed.mp4")
         r = make_tool("smart_reframe", input_path=input_video, boxes_json=boxes_json,
-                      out_path=reframed, target_w=self.cfg.reframe.target_w,
+                      out_path=reframed, target_w=dims["width"], target_h=dims["height"],
                       alpha=self.cfg.reframe.alpha, deadband=self.cfg.reframe.deadband)
         self._step("reframe", r.ok, str(r.metrics), reframed if r.ok else None)
         if not (r and r.ok):
@@ -180,16 +202,8 @@ class KineticStudio:
                                    error="reframe failed", audio_used=audio)
         reframed = reframed if r.ok else None
 
-        # 7) kinetic ramper (tempo sync to beats)
-        ramped = str(self.work / "ramped.mp4")
-        r = make_tool("kinetic_ramper", input_path=reframed, map_json=beats_json,
-                      out_path=ramped, setup_speed=self.cfg.ramp.setup_speed,
-                      peak_speed=self.cfg.ramp.peak_speed)
-        self._step("ramper", r.ok, str(r.metrics), ramped if r.ok else None)
-        ramped = ramped if (r and r.ok) else reframed
-        assert ramped is not None, "reframed must exist at this point"
-
-        # 8) captions (if voiceover/speech present and enabled)
+        # 7) captions (if voiceover/speech present and enabled) — must run BEFORE the
+        #    ramper so the ramper can sync slow-mo to speech onsets (voice peaks).
         captions_json = None
         if self.cfg.caption.enabled and voiceover:
             captions_json = str(self.work / "captions.json")
@@ -202,9 +216,30 @@ class KineticStudio:
         else:
             self._step("captions", True, "disabled / no voiceover")
 
+        # 8) kinetic ramper (tempo sync to beats + markers + voice peaks from captions)
+        ramped = str(self.work / "ramped.mp4")
+        # derive voice-peak anchors from caption word onsets (when captions are enabled)
+        voice_peaks: List[float] = []
+        if captions_json and os.path.exists(captions_json):
+            try:
+                with open(captions_json) as fh:
+                    _cap = json.load(fh)
+                voice_peaks = [w["start"] for w in _cap.get("words", []) if "start" in w]
+            except Exception:
+                voice_peaks = []
+        r = make_tool("kinetic_ramper", input_path=reframed, map_json=beats_json,
+                      marker_times=",".join(str(m) for m in self.cfg.ramp.markers) or None,
+                      voice_peaks=",".join(str(v) for v in voice_peaks) or None,
+                      out_path=ramped, setup_speed=self.cfg.ramp.setup_speed,
+                      peak_speed=self.cfg.ramp.peak_speed,
+                      snap_tolerance=self.cfg.ramp.snap_tolerance)
+        self._step("ramper", r.ok, str(r.metrics), ramped if r.ok else None)
+        ramped = ramped if (r and r.ok) else reframed
+        assert ramped is not None, "reframed must exist at this point"
+
         # 9) Remotion final composite (HUD + kinetic captions over ramped video)
         final = str(self.work / out_name)
-        remotion_ok = self._render_studio(ramped, captions_json, final)
+        remotion_ok = self.should_render_studio() and self._render_studio(ramped, captions_json, final)
         if not remotion_ok:
             self._step("studio_composite", False, "Remotion render unavailable; "
                        "using ramped.mp4 as final", ramped)
@@ -226,6 +261,41 @@ class KineticStudio:
                                audio_used=audio)
 
     # ---- Remotion bridge -----------------------------------------------------
+    @staticmethod
+    def _composition_fps(requested: Optional[int]) -> int:
+        """The fps the Remotion composition is rendered at.
+
+        Uses the requested fps from config; only falls back to 30 when none was
+        provided. This is the regression anchor for the fps-hardcoding bug: the renderer
+        must honor the configured fps (e.g. 60) and never bake in a default.
+        """
+        return int(requested) if requested else 30
+
+    def _build_studio_input(self, bg_name: str, cap_data: Optional[dict],
+                            n_frames: int) -> Dict[str, Any]:
+        """Assemble the studio_input.json payload the Remotion composite consumes.
+
+        Pure with respect to rendering: building this dict does NOT require a browser, so
+        it is unit-testable on the VPS. fps/dims come from config (via _composition_fps),
+        proving the composer is driven by config, not a hard-coded default.
+        """
+        words = cap_data["words"] if cap_data else []
+        frame_schedule = cap_data["frame_schedule"] if cap_data else []
+        return {
+            "video": bg_name,
+            "brand": self.cfg.brand.name,
+            "accent": self.cfg.brand.accent,
+            "watermark_sub": self.cfg.brand.watermark_sub,
+            "exercise": self.cfg.brand.exercise,
+            "exercise_detail": self.cfg.brand.exercise_detail,
+            "words": words,
+            "frame_schedule": frame_schedule,
+            "fps": self._composition_fps(self.cfg.output.fps),
+            "width": self.cfg.output.width,
+            "height": self.cfg.output.height,
+            "durationInFrames": max(60, n_frames or (len(frame_schedule) if cap_data else 300)),
+        }
+
     def _render_studio(self, video_path: str, captions_json: Optional[str],
                        out_path: str) -> bool:
         remotion_dir = Path(__file__).resolve().parent.parent / "remotion"
@@ -263,21 +333,7 @@ class KineticStudio:
         if captions_json and os.path.exists(captions_json):
             with open(captions_json) as fh:
                 cap_data = json.load(fh)
-        studio_input = {
-            "video": "studio_bg.mp4",
-            "brand": self.cfg.brand.name,
-            "accent": self.cfg.brand.accent,
-            "watermark_sub": self.cfg.brand.watermark_sub,
-            "exercise": self.cfg.brand.exercise,
-            "exercise_detail": self.cfg.brand.exercise_detail,
-            "words": cap_data["words"] if cap_data else [],
-            "frame_schedule": cap_data["frame_schedule"] if cap_data else [],
-            "fps": self.cfg.output.fps,
-            "width": self.cfg.output.width,
-            "height": self.cfg.output.height,
-            "durationInFrames": max(60, n_frames or
-                                    (len(cap_data["frame_schedule"]) if cap_data else 300)),
-        }
+        studio_input = self._build_studio_input(bg.name, cap_data, n_frames)
         with open(remotion_dir / "studio_input.json", "w") as fh:
             json.dump(studio_input, fh)
         try:

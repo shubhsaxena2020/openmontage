@@ -12,7 +12,7 @@ from __future__ import annotations
 import json
 import os
 from dataclasses import dataclass, field, asdict
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 
 @dataclass
@@ -45,6 +45,8 @@ class RampSpec:
     setup_speed: float = 1.6     # speed-up during low-energy setup
     peak_speed: float = 0.4      # slow-mo on peak lifts / drops
     drop_rel_thr: float = 1.25   # relative energy jump => "drop"
+    markers: List[float] = field(default_factory=list)  # explicit anchor seconds (sync)
+    snap_tolerance: float = 0.05 # seconds; anchors within this of a frame grid are snapped
 
 
 @dataclass
@@ -65,6 +67,13 @@ class PoseSpec:
 
 
 @dataclass
+class MotionPresetSpec:
+    name: str = "cinematic"     # key into kinetic_studio.presets.PRESETS
+    apply_zoom: bool = True     # include the preset's Ken-Burns zoom keyframes
+    apply_transition: bool = True
+
+
+@dataclass
 class KineticStudioConfig:
     brand: BrandSpec = field(default_factory=BrandSpec)
     output: OutputSpec = field(default_factory=OutputSpec)
@@ -72,6 +81,8 @@ class KineticStudioConfig:
     ramp: RampSpec = field(default_factory=RampSpec)
     caption: CaptionSpec = field(default_factory=CaptionSpec)
     pose: PoseSpec = field(default_factory=PoseSpec)
+    motion: MotionPresetSpec = field(default_factory=MotionPresetSpec)
+    preview: bool = False          # proxy/draft mode: low-res, skip HUD composite, faster
     workdir: str = "studio_out"  # where intermediates + final short land
 
     # --- (de)serialization ---------------------------------------------------
@@ -87,6 +98,7 @@ class KineticStudioConfig:
             ramp=RampSpec(**(d.get("ramp") or {})),
             caption=CaptionSpec(**(d.get("caption") or {})),
             pose=PoseSpec(**(d.get("pose") or {})),
+            motion=MotionPresetSpec(**(d.get("motion") or {})),
             workdir=d.get("workdir", "studio_out"),
         )
 

@@ -23,33 +23,103 @@ import numpy as np
 from tools.base_tool import BaseTool, ToolResult
 
 
-def _build_segments(control_t: List[float], slow_windows: List[float],
-                    setup_speed: float, peak_speed: float) -> List[Dict[str, float]]:
-    """Return [(t_start, t_end, speed)] covering [0, last_control], with slow speed inside
-    any slow_window (a peak/drop region) and setup_speed elsewhere. Adjacent segments of
-    the same speed are MERGED so the rendered output is a small number of clean, contiguous
-    time-remaps (no micro-segment concat artifacts / frozen frames)."""
-    if not control_t:
+def resolve_anchors(times: List[float], fps: float, snap_tolerance: float = 0.05) -> List[float]:
+    """Merge beats / markers / voice peaks into a single, stable anchor list.
+
+    Each anchor is optionally *snapped* to the nearest frame grid (1/fps) when it falls
+    within `snap_tolerance` seconds of a grid line. This is what keeps audio-synced motion
+    from drifting: slightly off-grid beats (e.g. 1.04s vs the 1.033s 30fps grid) snap to
+    the frame and stay locked, while genuinely off-grid markers (tolerance 0) are kept
+    exactly. De-duplicates on the snapped grid so merged sources don't double-anchor.
+
+    Returns sorted, de-duplicated, non-negative anchors. Pure & testable.
+    """
+    grid = 1.0 / max(1e-6, fps)
+    out: List[float] = []
+    for t in times:
+        if t is None or t < 0:
+            continue
+        if snap_tolerance and snap_tolerance > 0:
+            nearest = round(t / grid) * grid
+            if abs(nearest - t) <= snap_tolerance:
+                t = nearest
+        out.append(round(t, 4))
+    # dedupe on a coarse grid, keep sorted
+    seen = set()
+    deduped = []
+    for t in sorted(out):
+        key = round(t / grid, 1)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(t)
+    return deduped
+
+
+def merge_slow_windows(slow_windows: List[float], grid: float,
+                        end: float) -> List[float]:
+    """Merge overlapping slow-window pairs into a flat, frame-snapped list.
+
+    Anchors are often dense (many beats within a pad), so naive per-anchor windows overlap
+    heavily and fragment the timeline into dozens of sub-frame segments — which makes ffmpeg
+    trim+setpts quantization drift far from the plan. Merging adjacent/overlapping windows
+    into one interval (and snapping its edges to the frame grid) yields clean, render-accurate
+    segments. Returns a flat [ws0, we0, ws1, we1, ...] list in seconds.
+    """
+    if not slow_windows:
         return []
-    end = control_t[-1]
-    # raw per-control-point speed flags
-    def is_slow(t0, t1):
-        return any(ws - 0.15 <= t0 and t1 <= we + 0.15
-                   for ws, we in [(slow_windows[i], slow_windows[i + 1])
-                                  for i in range(0, len(slow_windows) - 1, 2)]) \
-            if slow_windows else False
-    raw: List[Dict[str, float]] = []
-    t = 0.0
-    for ct in control_t:
-        ct = min(ct, end)
-        raw.append({"t_start": round(t, 3), "t_end": round(ct, 3),
-                    "speed": peak_speed if is_slow(t, ct) else setup_speed})
-        t = ct
-    if t < end:
-        raw.append({"t_start": round(t, 3), "t_end": round(end, 3), "speed": setup_speed})
-    # merge adjacent equal-speed segments
+    ivs = sorted((round(slow_windows[i], 3), round(slow_windows[i + 1], 3))
+                 for i in range(0, len(slow_windows) - 1, 2))
+    merged: List[List[float]] = []
+    cs, ce = ivs[0]
+    for s, e in ivs[1:]:
+        if s <= ce:           # overlap or touching -> extend
+            ce = max(ce, e)
+        else:
+            merged.append([cs, ce])
+            cs, ce = s, e
+    merged.append([cs, ce])
+    flat: List[float] = []
+    for s, e in merged:
+        s = max(0.0, round(round(s / grid) * grid, 3))
+        e = min(round(end, 3), round(round(e / grid) * grid, 3))
+        if e > s:
+            flat += [s, e]
+    return flat
+
+
+def _build_segments(slow_windows: List[float], setup_speed: float, peak_speed: float,
+                    end: float) -> List[Dict[str, float]]:
+    """Build the tempo-remap timeline from explicit slow windows.
+
+    Walks [0, end] and emits `setup_speed` segments everywhere EXCEPT inside each slow
+    window (a [start,end] pair), where it emits `peak_speed` (slow-mo). Adjacent
+    equal-speed segments are merged so the rendered output is a small number of clean,
+    contiguous time-remaps (no micro-segment concat artifacts / frozen frames).
+
+    Narrow slow windows (e.g. 0.3s around a drop) stay narrow — the previous implementation
+    tested full *containment* of each control-point segment inside the tiny window, which
+    almost never held, so every segment collapsed to setup_speed and the slow-mo was lost.
+    """
+    if not slow_windows:
+        return [{"t_start": 0.0, "t_end": round(end, 3), "speed": setup_speed}]
+    wins = sorted((slow_windows[i], slow_windows[i + 1])
+                  for i in range(0, len(slow_windows) - 1, 2))
+    segs: List[Dict[str, float]] = []
+    cur = 0.0
+    for ws, we in wins:
+        ws = max(0.0, round(ws, 3))
+        we = min(round(end, 3), round(we, 3))
+        if we <= ws:
+            continue
+        if ws > cur:
+            segs.append({"t_start": round(cur, 3), "t_end": ws, "speed": setup_speed})
+        segs.append({"t_start": ws, "t_end": we, "speed": peak_speed})
+        cur = we
+    if cur < end:
+        segs.append({"t_start": round(cur, 3), "t_end": round(end, 3), "speed": setup_speed})
     merged: List[Dict[str, float]] = []
-    for s in raw:
+    for s in segs:
         if merged and merged[-1]["speed"] == s["speed"] and merged[-1]["t_end"] == s["t_start"]:
             merged[-1]["t_end"] = s["t_end"]
         else:
@@ -78,6 +148,12 @@ class KineticRamperTool(BaseTool):
                      "help": "beat_drop_mapper JSON (drops/peaks timestamps)"},
         "peak_times": {"type": "str", "default": None,
                        "help": "comma-sep peak/drop seconds if no map_json"},
+        "marker_times": {"type": "str", "default": None,
+                         "help": "comma-sep explicit marker seconds to anchor slow-mo on"},
+        "voice_peaks": {"type": "str", "default": None,
+                        "help": "comma-sep voice-peak seconds (e.g. word onsets) to anchor on"},
+        "snap_tolerance": {"type": "float", "default": 0.05,
+                           "help": "seconds; anchors within this of a frame grid are snapped (anti-drift)"},
         "setup_speed": {"type": "float", "default": 1.6, "help": "speed during setup"},
         "peak_speed": {"type": "float", "default": 0.4, "help": "speed during peaks (slow-mo)"},
         "keep_audio": {"type": "bool", "default": True,
@@ -91,16 +167,33 @@ class KineticRamperTool(BaseTool):
         if not ff or not os.path.exists(ff):
             return ToolResult(ok=False, error=f"ffmpeg not found: {p['ffmpeg']}")
 
-        # collect control points (peak/drop timestamps)
-        peaks: List[float] = []
+        # collect control points (peak/drop timestamps) from every anchor source
+        beats: List[float] = []
         if p["map_json"]:
             with open(p["map_json"]) as fh:
                 m = json.load(fh)
-            peaks = [d["t_sec"] for d in m.get("drops", [])]
-            peaks += m.get("downbeat_times", [])
+            beats = [d["t_sec"] for d in m.get("drops", [])]
+            beats += m.get("downbeat_times", [])
         if p["peak_times"]:
-            peaks += [float(x) for x in p["peak_times"].split(",") if x.strip()]
-        peaks = sorted(set(round(x, 3) for x in peaks if x >= 0))
+            beats += [float(x) for x in p["peak_times"].split(",") if x.strip()]
+        markers: List[float] = []
+        if p["marker_times"]:
+            markers += [float(x) for x in p["marker_times"].split(",") if x.strip()]
+        voice: List[float] = []
+        if p["voice_peaks"]:
+            voice += [float(x) for x in p["voice_peaks"].split(",") if x.strip()]
+
+        # Merge + snap-to-grid so slightly off-grid audio does not drift. beats already
+        # come from the beat map; markers/voice peaks are explicit anchors.
+        fps_cap = 30.0
+        try:
+            import cv2  # type: ignore
+            _cap = cv2.VideoCapture(p["input_path"])
+            fps_cap = _cap.get(cv2.CAP_PROP_FPS) or 30.0
+            _cap.release()
+        except Exception:
+            pass
+        peaks = resolve_anchors(beats + markers + voice, fps_cap, p["snap_tolerance"])
         if not peaks:
             # No beat/drop signal (e.g. silent footage, no music supplied). Degrade
             # gracefully to a single uniform-speed segment instead of failing — the
@@ -108,18 +201,34 @@ class KineticRamperTool(BaseTool):
             segs = [{"t_start": 0.0, "t_end": 1e9, "speed": p["setup_speed"]}]
             slow_windows: List[float] = []
         else:
-            # Slow-mo windows are centered on each drop/peak. The _build_segments
-            # `is_slow` check treats slow_windows as a flat list of (start,end) pairs,
-            # so expand every drop into a [d-pad, d+pad] window here.
+            # Slow-mo windows are centered on each drop/peak; expand every anchor into a
+            # [d-pad, d+pad] window (a flat list of start,end pairs).
             pad = 0.15
             slow_windows = []
             for d in peaks:
                 slow_windows.append(round(max(0.0, d - pad), 3))
                 slow_windows.append(round(d + pad, 3))
-            segs = _build_segments(peaks, slow_windows, p["setup_speed"], p["peak_speed"])
+            # end = full clip duration so the whole footage is covered (slow windows are
+            # narrow islands inside it); fall back to last peak+pad if probe fails.
+            clip_dur = 0.0
+            try:
+                import cv2  # type: ignore
+                _c = cv2.VideoCapture(p["input_path"])
+                _n = _c.get(cv2.CAP_PROP_FRAME_COUNT) or 0
+                _f = _c.get(cv2.CAP_PROP_FPS) or 30.0
+                clip_dur = float(_n) / float(_f) if _f else 0.0
+                _c.release()
+            except Exception:
+                clip_dur = 0.0
+            if clip_dur <= 0:
+                clip_dur = float(peaks[-1] + pad)
+            # merge overlapping windows + snap to frame grid so ffmpeg's trim+setpts stays
+            # accurate (dense anchors would otherwise fragment the timeline and drift).
+            grid = 1.0 / max(1e-6, fps_cap)
+            slow_windows = merge_slow_windows(slow_windows, grid, clip_dur)
+            segs = _build_segments(slow_windows, p["setup_speed"], p["peak_speed"], clip_dur)
 
-        # render each segment with setpts, then concat
-        import cv2
+        import cv2  # type: ignore  (used by the render loop fps probe + smoothness check)
         cap = cv2.VideoCapture(p["input_path"])
         fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
         cap.release()
