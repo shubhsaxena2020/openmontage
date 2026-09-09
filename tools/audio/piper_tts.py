@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+import sys
 import time
 from pathlib import Path
 from typing import Any
@@ -95,8 +96,20 @@ class PiperTTS(BaseTool):
     side_effects = ["writes audio file to output_path"]
     user_visible_verification = ["Listen to generated audio for intelligibility"]
 
+    @staticmethod
+    def _piper_bin() -> str | None:
+        """Resolve the piper CLI whether or not the venv is on PATH."""
+        found = shutil.which("piper")
+        if found:
+            return found
+        bindir = Path(sys.executable).parent
+        for cand in (bindir / "piper.exe", bindir / "piper", bindir / "Scripts" / "piper.exe"):
+            if cand.exists():
+                return str(cand)
+        return None
+
     def get_status(self) -> ToolStatus:
-        if shutil.which("piper"):
+        if self._piper_bin():
             return ToolStatus.AVAILABLE
         return ToolStatus.UNAVAILABLE
 
@@ -120,10 +133,23 @@ class PiperTTS(BaseTool):
         output_path = Path(inputs.get("output_path", "tts_output.wav"))
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
+        model = inputs.get("model", "en_US-lessac-medium")
+        # piper-tts >=1.7 resolves bare voice names from --data-dir only; keep a
+        # stable local voice store and fetch the voice on first use.
+        models_dir = Path.home() / ".piper" / "models"
+        models_dir.mkdir(parents=True, exist_ok=True)
+        if not (models_dir / f"{model}.onnx").exists():
+            subprocess.run(
+                [sys.executable, "-m", "piper.download_voices", model],
+                cwd=str(models_dir), capture_output=True, text=True, timeout=300,
+            )
+
         proc = subprocess.run(
             [
-                "piper",
-                "--model", inputs.get("model", "en_US-lessac-medium"),
+                self._piper_bin() or "piper",
+                "--model", model,
+                "--data-dir", str(models_dir),
+                "--download-dir", str(models_dir),
                 "--speaker", str(inputs.get("speaker_id", 0)),
                 "--length-scale", str(inputs.get("length_scale", 1.0)),
                 "--sentence-silence", str(inputs.get("sentence_silence", 0.3)),

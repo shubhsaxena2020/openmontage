@@ -104,3 +104,12 @@ venv/
 
 # Local Wan / diffusers GPU environment
 .venv-wan/
+
+# Temporary scratch and render intermediates
+_tmp/
+
+# Vendored neural net / AI model binaries and executables
+tools/bin/
+
+# Large local editing assets (video overlays, LUTs, audio SFX)
+assets/editing/
