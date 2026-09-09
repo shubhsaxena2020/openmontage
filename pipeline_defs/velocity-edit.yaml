@@ -1,0 +1,151 @@
+name: velocity-edit
+version: "2.0"
+description: >
+  High-energy anime, velocity, phonk, and AMV video editing pipeline.
+  Features automated beat tracking, neural frame interpolation (RIFE v4 on Intel Arc),
+  anime super-resolution (Real-CUGAN / Real-ESRGAN), speed-ramped velocity curves,
+  beat-synchronized impact flashes, chromatic aberration, bloom, and DSP audio mastering.
+category: velocity
+stability: production
+default_checkpoint_policy: guided
+
+reference_input:
+  supported: true
+  analysis_depth: deep
+  analysis_tools:
+    - beat_sync
+    - scene_detect
+    - video_analyzer
+
+orchestration:
+  mode: executive-producer
+  skill: pipelines/velocity-edit/executive-producer
+  budget_default_usd: 1.50
+  max_revisions_per_stage: 3
+  max_send_backs: 3
+  max_wall_time_minutes: 15
+
+extensions:
+  custom_scripts: true
+  custom_playbooks: true
+  custom_skills: true
+  custom_tools: true
+
+required_skills:
+  - pipelines/velocity-edit/executive-producer
+  - pipelines/velocity-edit/beat-director
+  - pipelines/velocity-edit/motion-director
+  - pipelines/velocity-edit/fx-director
+  - pipelines/velocity-edit/master-director
+  - meta/reviewer
+  - meta/checkpoint-protocol
+
+compatible_playbooks:
+  recommended:
+    - flat-motion-graphics
+    - anime-velocity
+  also_works:
+    - clean-professional
+  custom_allowed: true
+
+stages:
+  - name: audio_analysis
+    skill: pipelines/velocity-edit/beat-director
+    produces:
+      - beat_map
+      - rhythm_brief
+    tools_available:
+      - beat_sync
+    checkpoint_required: true
+    human_approval_default: false
+    review_focus:
+      - BPM and beat timestamps accurately extracted
+      - Downbeats and high-energy onset transients identified
+      - Target cut points aligned within 15ms of beat impacts
+    success_criteria:
+      - Valid beat_map with tempo and downbeat timestamps
+
+  - name: asset_enhancement
+    skill: pipelines/velocity-edit/motion-director
+    required_artifacts_in:
+      - beat_map
+    produces:
+      - enhanced_media_manifest
+    tools_available:
+      - frame_interpolate
+      - anime_upscale
+    checkpoint_required: false
+    human_approval_default: false
+    review_focus:
+      - 60fps frame interpolation applied cleanly without edge tearing
+      - Line art clarity preserved with Real-CUGAN / Real-ESRGAN
+      - No CUDA dependencies used (Intel Arc Vulkan native)
+    success_criteria:
+      - Source media conformed to target framerate and resolution
+
+  - name: velocity_composition
+    skill: pipelines/velocity-edit/motion-director
+    required_artifacts_in:
+      - beat_map
+      - enhanced_media_manifest
+    produces:
+      - velocity_sequence
+    tools_available:
+      - velocity_ramp
+    checkpoint_required: true
+    human_approval_default: false
+    review_focus:
+      - Smooth exponential speed ramps (slow-mo into fast impact snap)
+      - Audio-video sync preserved across speed transitions
+    success_criteria:
+      - Rendered velocity sequence with accurate time-remapping
+
+  - name: visual_fx
+    skill: pipelines/velocity-edit/fx-director
+    required_artifacts_in:
+      - velocity_sequence
+      - beat_map
+    produces:
+      - stylized_render
+    tools_available:
+      - anime_fx
+    checkpoint_required: true
+    human_approval_default: false
+    review_focus:
+      - Impact flashes and chromatic aberration pulse exactly on beat drops
+      - Bloom, film grain, and 3D LUT grading conform to selected style preset
+    success_criteria:
+      - Stylized composite video matching velocity/phonk/amv aesthetic
+
+  - name: audio_mastering
+    skill: pipelines/velocity-edit/master-director
+    required_artifacts_in:
+      - rhythm_brief
+    produces:
+      - mastered_soundtrack
+    tools_available:
+      - dsp_master
+    checkpoint_required: false
+    human_approval_default: false
+    review_focus:
+      - Punchy low-end 110Hz bass boost without clipping
+      - Loudness normalized to -9 LUFS with brickwall peak limiting
+    success_criteria:
+      - Mastered audio waveform with high dynamic impact
+
+  - name: pipeline_conformance
+    skill: pipelines/velocity-edit/executive-producer
+    required_artifacts_in:
+      - stylized_render
+      - mastered_soundtrack
+    produces:
+      - final_deliverable
+    tools_available:
+      - anime_edit
+    checkpoint_required: true
+    human_approval_default: true
+    review_focus:
+      - End-to-end audio/video sync and duration match
+      - Zero dropped frames, clean audio tail
+    success_criteria:
+      - Final high-bitrate MP4 export
