@@ -743,6 +743,31 @@ For bugs, feature requests, and workflow discussions, use [GitHub Issues](https:
 
 ---
 
+## Local extensions (anime FX, velocity edit, beat sync, DSP mastering, Windows setup)
+
+This fork includes localized editing and post-production extensions designed for high-energy anime velocity edits, AMVs, and stylized short-form content:
+
+### Tools & Capabilities
+
+- **`anime_edit`** (`tools/video/anime_edit.py`): High-level orchestrator tool combining beat detection, AI frame interpolation, neural anime upscaling, speed-ramping velocity curves, stylized visual effects, and DSP audio mastering into an automated end-to-end production workflow.
+- **`anime_fx`** (`tools/video/anime_fx.py`): Stylized visual effects engine featuring customizable color lookup tables (LUTs), motion-matched speed lines, film grain, light leaks, chromatic aberration, and cinematic glow/bloom overlays.
+- **`anime_upscale`** (`tools/video/anime_upscale.py`): Neural anime video upscaler leveraging Vulkan NCNN engines (Real-CUGAN, Waifu2x, Real-ESRGAN) for fast local GPU/Vulkan super-resolution.
+- **`beat_sync`** (`tools/video/beat_sync.py`): Precision audio rhythm analyzer powered by `librosa` and `aubio`, detecting musical beats, downbeats, onsets, and tempo drops to align edit cuts and velocity curves.
+- **`frame_interpolate`** (`tools/video/frame_interpolate.py`): AI frame interpolation engine supporting RIFE and CAIN NCNN Vulkan runtimes for ultra-smooth slow-motion and fluid framerate multiplication (e.g. 24fps -> 60fps).
+- **`velocity_ramp`** (`tools/video/velocity_ramp.py`): Non-linear time remapping tool computing bezier and exponential speed curves synchronized to detected musical drops and peaks.
+- **`dsp_master`** (`tools/audio/dsp_master.py`): Broadcast-quality DSP mastering chain providing multi-band dynamic compression, parametric EQ, sidechain ducking, stereo widening, and EBU R128 loudness normalization.
+
+### Pipelines & Configuration
+
+- **`velocity-edit` pipeline** (`pipeline_defs/velocity-edit.yaml`): Declarative pipeline schema coordinating beat sync, velocity ramping, anime upscaling, effects layering, and audio mastering.
+- **`skills/pipelines/velocity-edit/`**: AI agent skill instructions and configuration for automated velocity editing.
+- **AI Wiring** (`AI_WIRING.md`): Environment configuration mapping OpenMontage project rules and skills to Claude Code, OpenAI Codex CLI, Gemini CLI, Qwen Code, Goose, Hermes, Antigravity (`agy`), and Cursor.
+- **Windows Setup & Verification** (`SETUP_WINDOWS.md`): Native Windows setup guide with `uv` + Python 3.11, PyTorch CUDA verification, Remotion Node package setup, and full test suite validation.
+- **Remotion Composer Extensions**: Expanded composition capabilities in `remotion-composer/package.json` and `remotion-composer/bun.lock` (Three.js `@react-three/fiber`, GSAP, Pixi.js, Sharp).
+- **Piper TTS Windows Hardening** (`tools/audio/piper_tts.py`): Robust binary path resolution on Windows environments and local voice caching under `~/.piper/models`.
+
+---
+
 ## Testing
 
 ```bash
